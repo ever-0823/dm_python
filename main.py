@@ -20,4 +20,5 @@ host 监听地址
 reload=true 开发模式：代码变动时自动重启服务器
 """
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)
+    # 使用导入字符串启动，才能让 reload=True 在开发环境里正确监听代码变更。
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

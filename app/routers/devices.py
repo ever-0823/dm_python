@@ -81,6 +81,99 @@ def get_device_statistics(user=Depends(current_user)):
     )
 
 
+"""CSV 导出接口"""
+
+
+@router.get("/devices/export")
+def export_devices(user=Depends(current_user)):
+    devices = Device.get_all_for_export()
+    # io.StringIO()：在内存里创建一个“文本文件”。
+    # csv.writer(output)：把 CSV 内容写到这个内存文件里。
+    output = io.StringIO()
+    write = csv.writer(output)
+
+    # 表头需要单独写成一行，不能把字符串列表当成多行数据传入。
+    write.writerow(["device_id", "device_name", "model", "manufacturer", "location", "status"])
+    for device in devices:
+        write.writerow([
+            device["device_id"],
+            device["device_name"],
+            device["model"],
+            device["manufacturer"],
+            device["location"],
+            device["status"]
+        ])
+    output.seek(0)
+    DeviceLog.create(
+        "All",
+        "export",
+        user["username"],
+        "导出设备列表 CSV",
+    )
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=devices.csv"},
+    )
+
+
+"""CSV导入接口"""
+
+
+@router.post("/devices/import")
+def import_devices(file: UploadFile = File(...), user=Depends(current_user)):
+    # 上传导入时统一按 UTF-8 读取 CSV 内容。
+    content = file.file.read().decode("utf-8")
+    # csv.DictReader(...)：按“表头 -> 值”的方式逐行读取。
+    reader = csv.DictReader(io.StringIO(content))
+
+    success_count = 0
+    skipped_count = 0
+
+    # .strip() 是 Python 字符串的内置方法，用于移除字符串首尾的空白字符。
+    for row in reader:
+        device_id = row.get("device_id", "").strip()
+        device_name = row.get("device_name", "").strip()
+
+        if not device_id or not device_name:
+            skipped_count += 1
+            continue
+
+        existing = Device.find_by_device_id(device_id)
+        if existing:
+            skipped_count += 1
+            continue
+
+        Device.create(
+            {
+                "device_id": device_id,
+                "device_name": device_name,
+                "model": row.get("model", "").strip(),
+                "manufacturer": row.get("manufacturer", "").strip(),
+                "location": row.get("location", "").strip(),
+                "status": row.get("status", "").strip() or "active",
+            }
+        )
+        success_count += 1
+
+    # 整个 CSV 处理完成后再写一条汇总日志，避免循环内提前返回。
+    DeviceLog.create(
+        "ALL",
+        "import",
+        user["username"],
+        f"导入设备 CSV，成功 {success_count} 条，跳过 {skipped_count} 条",
+    )
+
+    return success_response(
+        message="导入完成",
+        data={
+            "success_count": success_count,
+            "skipped_count": skipped_count,
+        },
+        operator=user["username"],
+    )
+
+
 """
 查询单个设备详情
 
@@ -268,93 +361,3 @@ def delete_device(device_id: str, user=Depends(current_user)):
     )
 
 
-"""CSV 导出接口"""
-
-
-@router.get("/devices/export")
-def export_devices(user=Depends(current_user)):
-    devices = Device.get_all_for_export()
-    # io.StringIO()：在内存里创建一个“文本文件”
-    # csv.writer(output)：把 CSV 内容写到这个内存文件里
-    output = io.StringIO()
-    write = csv.writer(output)
-
-    write.writerows(["device_id", "device_name", "model", "manufacturer", "location", "status"])
-    for device in devices:
-        write.writerow([
-            device["device_id"],
-            device["device_name"],
-            device["model"],
-            device["manufacturer"],
-            device["location"],
-            device["status"]
-        ])
-    output.seek(0)
-    DeviceLog.create(
-        "All",
-        "export",
-        user["username"],
-        "导出设备列表 CSV",
-    )
-    return StreamingResponse(
-        iter([output.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=devices.csv"},
-    )
-
-
-"""CSV导入接口"""
-
-
-@router.post("/devices/import")
-def import_devices(file: UploadFile = File(...), user=Depends(current_user)):
-    # file.file.read()：读取上传文件内容 .decode("utf-8")：把字节转成字符串
-    content = file.file.read().decode("utf-8")
-    # csv.DictReader(...)：按“表头 -> 值”的方式逐行读取
-    reader = csv.DictReader(io.StringIO(content))
-
-    success_count = 0
-    skipped_count = 0
-
-    # .strip() 是 Python 字符串的内置方法，用于移除字符串首尾的空白字符
-    for row in reader:
-        device_id = row.get("device_id", "").strip()
-        device_name = row.get("device_name", "").strip()
-
-        if not device_id or not device_name:
-            skipped_count += 1
-            continue
-
-        existing = Device.find_by_device_id(device_id)
-        if existing:
-            skipped_count += 1
-
-            continue
-
-        Device.create(
-            {
-                "device_id": device_id,
-                "device_name": device_name,
-                "model": row.get("model", "").strip(),
-                "manufacturer": row.get("manufacturer", "").strip(),
-                "location": row.get("location", "").strip(),
-                "status": row.get("status", "").strip() or "active",
-            }
-        )
-
-        success_count += 1
-
-        DeviceLog.create(
-            "ALL",
-            "import",
-            user["username"],
-            f"导入设备 CSV,成功{success_count}条,跳过{skipped_count}条",
-        )
-
-        return success_response(
-            message="导入完成",
-            data={
-                "success_count": success_count,
-                "skipped_count": skipped_count,
-            },
-        )
